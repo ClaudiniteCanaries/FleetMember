@@ -8,7 +8,7 @@ packs:
   declared:
     - "basics"
     - "claudinite"
-    - "git-github"
+    - {id: "git-github", version: "1.61013.1"}
   manager:
     repo: "ClaudiniteCanaries/FleetManager"
 tasks:
