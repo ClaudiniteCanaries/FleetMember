@@ -1,8 +1,8 @@
 engine:
   channel: "staging"
   releases: "ClaudiniteCanaries/StagingReleases"
-  version: "1.61022.5"
-  manifest: "sha512-0rAhry8ZMuEmgalCKV69GBReMmgxueyxuVclDi5XNN3VacIU+SSF5HXDr9GPxctoiX+BM3xY1uZQ+Y5giHdiLA=="
+  version: "1.61026.1"
+  manifest: "sha512-B4X9SK0COm+HdvzU9ee35lSuWprhhAPynGxVtWEuQf0xEsJqWtCfYQrv55Vl+eaHcbi9Fh2zBmq4B8eLPEjybw=="
 packs:
   channel: "canary"
   declared:
