@@ -410,6 +410,7 @@ jobs:
           }
       - name: S-09 a fixture session lands encrypted
         run: |
+          git fetch --quiet origin "$BRANCH" 2> /dev/null && git ls-tree -r --name-only FETCH_HEAD | sort > "$RUNNER_TEMP/names-before" || : > "$RUNNER_TEMP/names-before"
           .claudinite/bin/cn growth capture --issue 0 --session "canary-member-$VERSION-$GITHUB_RUN_ID" \
             --transcript canary-fixtures/session.jsonl | tee "$RUNNER_TEMP/capture.txt"
           grep -q "on $BRANCH" "$RUNNER_TEMP/capture.txt" || { echo "::error::the capture did not report a file stored on $BRANCH"; exit 1; }
@@ -423,8 +424,8 @@ jobs:
             echo "::error::the fixture's text is readable on $BRANCH"
             exit 1
           fi
-          f=$(git ls-tree -r --name-only FETCH_HEAD | grep "canary-member-$VERSION-$GITHUB_RUN_ID" | head -n 1)
-          [ -n "$f" ] || { echo "::error::no file of $BRANCH names the capture's session"; exit 1; }
+          f=$(git ls-tree -r --name-only FETCH_HEAD | sort | comm -13 "$RUNNER_TEMP/names-before" - | grep '\.age$' | head -n 1)
+          [ -n "$f" ] || { echo "::error::$BRANCH gained no .age file from the capture"; exit 1; }
           git show "FETCH_HEAD:$f" | age -d -i "$RUNNER_TEMP/identity.txt" | gunzip | tail -n +2 | diff - canary-fixtures/session.jsonl || {
             echo "::error::the opened capture differs from the fixture"
             exit 1
