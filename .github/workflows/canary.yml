@@ -433,7 +433,7 @@ jobs:
       - name: S-09 growth-extract bundles the session through the executor
         run: |
           started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          created=$(.claudinite/bin/cn work create claudinite/growth-extract)
+          created=$(.claudinite/bin/cn work create claudinite/growth-extract --qualifier "canary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
           echo "$created"
           number=$(sed -n 's/^created #\([0-9]*\) .*/\1/p' <<<"$created")
           [ -n "$number" ] || { echo "::error::cn work create did not report the item it filed"; exit 1; }
@@ -486,7 +486,7 @@ jobs:
           age-keygen -o "$RUNNER_TEMP/other.key" 2> "$RUNNER_TEMP/other.pub.txt"
           other=$(sed -n 's/^Public key: //p' "$RUNNER_TEMP/other.pub.txt")
           printf '# repo %s\n%s\n' "$REPO_ID" "$other" > .claudinite/keys/conversation-logs.pub
-          created=$(.claudinite/bin/cn work create claudinite/growth-extract)
+          created=$(.claudinite/bin/cn work create claudinite/growth-extract --qualifier "canary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-swap")
           echo "$created"
           number=$(sed -n 's/^created #\([0-9]*\) .*/\1/p' <<<"$created")
           [ -n "$number" ] || { echo "::error::cn work create did not report the item it filed"; exit 1; }
