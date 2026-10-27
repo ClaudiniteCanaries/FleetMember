@@ -335,8 +335,184 @@ jobs:
           git push -q "$url" conversation-logs
           echo "seeded conversation-logs: $(git rev-list --count HEAD) commits, $(ls | wc -l) captures at the tip"
 
+  # S-09 and S-12. The fleet manager's canary (S-08) gives this repo its key
+  # secrets and commits the public half to main; the job after this one waits
+  # for that file. No routine is configured here, so a growth-extract
+  # hand-off ends at "could not start an agent session", which is the proof
+  # the code-work reached the hand-off with a bundle.
+  await-key:
+    needs: canary
+    if: ${{ !cancelled() && needs.canary.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: S-09 wait for the manager to commit the public key
+        run: |
+          deadline=$((SECONDS + 55 * 60))
+          until gh api "repos/$GITHUB_REPOSITORY/contents/.claudinite/keys/conversation-logs.pub?ref=main" > /dev/null 2>&1; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::no .claudinite/keys/conversation-logs.pub on main: the fleet manager canary (S-08) did not run its fleet-history-keys step for this repo"
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "the public key is on main"
+
+  growth:
+    needs: [canary, await-key]
+    if: ${{ !cancelled() && needs.await-key.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    environment:
+      name: claudinite
+      deployment: false
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      BRANCH: encrypted-agent-sessions
+      SESSION_HISTORY_KEY: ${{ secrets.SESSION_HISTORY_KEY }}
+      REPO_ID: ${{ github.repository_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+      - name: download the pinned engine and age
+        run: |
+          { npx --yes @claudinite/setup@1.0.1 >&2 && .claudinite/bin/cn version; }
+          sudo apt-get install -y --no-install-recommends age > /dev/null
+      - name: S-09 close the items earlier runs left
+        run: |
+          for n in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title \
+              --jq '.[] | select(.title | startswith("[claudinite-work]")) | .number'); do
+            gh issue close "$n" --repo "$GITHUB_REPOSITORY" --reason "not planned" \
+              --comment "Closed by the canary $VERSION before its growth scenario." > /dev/null
+          done
+      - name: S-09 the committed key is the one the secret derives
+        run: |
+          [ -n "$SESSION_HISTORY_KEY" ] || { echo "::error::SESSION_HISTORY_KEY is empty in the claudinite environment: the manager's S-08 step did not write it"; exit 1; }
+          python3 scripts/derive_history_key.py "$REPO_ID" "$RUNNER_TEMP/derived.pub" "$RUNNER_TEMP/identity.txt"
+          echo "::add-mask::$(tail -n 1 "$RUNNER_TEMP/identity.txt")"
+          diff "$RUNNER_TEMP/derived.pub" .claudinite/keys/conversation-logs.pub || {
+            echo "::error::the committed public key is not the one SESSION_HISTORY_KEY derives for this repository"
+            exit 1
+          }
+      - name: S-09 a fixture session lands encrypted
+        run: |
+          .claudinite/bin/cn growth capture --issue 0 --session "canary-member-$VERSION" \
+            --transcript canary-fixtures/session.jsonl | tee "$RUNNER_TEMP/capture.txt"
+          grep -q "on $BRANCH" "$RUNNER_TEMP/capture.txt" || { echo "::error::the capture did not report a file stored on $BRANCH"; exit 1; }
+          git fetch --quiet origin "$BRANCH"
+          files=$(git ls-tree -r --name-only FETCH_HEAD | grep -v '^README.md$')
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qv '\.age$'; then
+            echo "::error::$BRANCH holds something that is not an .age file, or nothing: $files"
+            exit 1
+          fi
+          if git grep -q 'canary-fixture-marker' FETCH_HEAD; then
+            echo "::error::the fixture's text is readable on $BRANCH"
+            exit 1
+          fi
+          f=$(git ls-tree -r --name-only FETCH_HEAD | grep "canary-member-$VERSION" | head -n 1)
+          [ -n "$f" ] || { echo "::error::no file of $BRANCH names the capture's session"; exit 1; }
+          git show "FETCH_HEAD:$f" | age -d -i "$RUNNER_TEMP/identity.txt" | gunzip | tail -n +2 | diff - canary-fixtures/session.jsonl || {
+            echo "::error::the opened capture differs from the fixture"
+            exit 1
+          }
+      - name: S-09 growth-extract bundles the session through the executor
+        run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          created=$(.claudinite/bin/cn work create claudinite/growth-extract)
+          echo "$created"
+          number=$(sed -n 's/^created #\([0-9]*\) .*/\1/p' <<<"$created")
+          [ -n "$number" ] || { echo "::error::cn work create did not report the item it filed"; exit 1; }
+          echo "ITEM=$number" >> "$GITHUB_ENV"
+          gh workflow run claudinite-executor.yml --repo "$GITHUB_REPOSITORY"
+          deadline=$((SECONDS + 75 * 60))
+          while :; do
+            sleep 30
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$number" --jq '[.labels[].name] | join(" ")')
+            case " $labels " in
+              *" task:status:needs-human-"* | *" task:status:running-agent "* | *" task:status:done "*) break ;;
+              *" task:status:rejected "*) echo "::error::growth-extract #$number was rejected"; exit 1 ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::the deadline passed before growth-extract #$number reached its hand-off; it carries: $labels"
+              exit 1
+            fi
+          done
+          text=$(gh api "repos/$GITHUB_REPOSITORY/issues/$number" --jq .body; gh api "repos/$GITHUB_REPOSITORY/issues/$number/comments" --jq '.[].body')
+          echo "$text" | grep -q 'captured session(s) are bundled for you' || {
+            echo "::error::#$number does not say a bundle was made ('captured session(s) are bundled for you')"
+            echo "$text"
+            exit 1
+          }
+          found=
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/claudinite-executor.yml/runs?created=%3E%3D$started&per_page=20" --jq '.workflow_runs[].id'); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --jq '.artifacts[].name' | grep -qx "claudinite-growth-bundle-$number"; then
+              found=$run
+            fi
+          done
+          [ -n "$found" ] || { echo "::error::no executor run uploaded claudinite-growth-bundle-$number"; exit 1; }
+          echo "run $found uploaded claudinite-growth-bundle-$number; #$number: $labels"
+          grep -q 'Could not start an agent session' <<<"$text" || grep -q 'running-agent' <<<"$labels" || {
+            echo "::error::#$number neither started an agent session nor said why it could not"
+            exit 1
+          }
+          # The hand-off's own capture must not store anything: only canary captures exist.
+          git fetch --quiet origin "$BRANCH"
+          others=$(git ls-tree -r --name-only FETCH_HEAD | grep '\.age$' | grep -vc 'canary-' || true)
+          echo "captures not named canary-: $others"
+      - name: S-09 close the item
+        if: ${{ always() && env.ITEM != '' }}
+        run: |
+          gh issue close "$ITEM" --repo "$GITHUB_REPOSITORY" --reason "not planned" --comment "Closed by the canary $VERSION." > /dev/null || true
+      # S-12. The same job, with the checkout's public key file replaced by one that
+      # is someone else's. The environment's secret is the real one, so the
+      # code-work must refuse before it decrypts anything.
+      - name: S-12 a swapped public key stops growth-extract and names both causes
+        run: |
+          age-keygen -o "$RUNNER_TEMP/other.key" 2> "$RUNNER_TEMP/other.pub.txt"
+          other=$(sed -n 's/^Public key: //p' "$RUNNER_TEMP/other.pub.txt")
+          printf '# repo %s\n%s\n' "$REPO_ID" "$other" > .claudinite/keys/conversation-logs.pub
+          created=$(.claudinite/bin/cn work create claudinite/growth-extract)
+          echo "$created"
+          number=$(sed -n 's/^created #\([0-9]*\) .*/\1/p' <<<"$created")
+          [ -n "$number" ] || { echo "::error::cn work create did not report the item it filed"; exit 1; }
+          echo "ITEM12=$number" >> "$GITHUB_ENV"
+          export RUNNER_TEMP GITHUB_ENV
+          .claudinite/bin/cn execute loop || true
+          labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$number" --jq '[.labels[].name] | join(" ")')
+          text=$(gh api "repos/$GITHUB_REPOSITORY/issues/$number" --jq .body; gh api "repos/$GITHUB_REPOSITORY/issues/$number/comments" --jq '.[].body')
+          echo "$labels"
+          failed=0
+          case " $labels " in
+            *" task:status:needs-human-"*) ;;
+            *) echo "::error::#$number was not parked for a person: $labels"; failed=1 ;;
+          esac
+          for phrase in 'is not the public key' 'the key file was changed' 'the secret was replaced'; do
+            grep -q "$phrase" <<<"$text" || { echo "::error::the finding on #$number lacks: $phrase"; failed=1; }
+          done
+          grep -q 'are bundled for you' <<<"$text" && { echo "::error::a bundle was made under a swapped key"; failed=1; }
+          [ "$failed" = 0 ] || { echo "$text"; exit 1; }
+      - name: S-12 close the item
+        if: ${{ always() && env.ITEM12 != '' }}
+        run: |
+          git checkout -- .claudinite/keys/conversation-logs.pub
+          gh issue close "$ITEM12" --repo "$GITHUB_REPOSITORY" --reason "not planned" --comment "Closed by the canary $VERSION." > /dev/null || true
+
   report:
-    needs: [canary, seed]
+    needs: [canary, seed, await-key, growth]
     if: failure()
     runs-on: ubuntu-24.04
     permissions:
