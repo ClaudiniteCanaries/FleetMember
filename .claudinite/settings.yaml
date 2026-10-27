@@ -16,3 +16,6 @@ tasks:
     "engine/update": "daily"
   merge:
     "engine/update": "merge-any-changes"
+growth:
+  mode: nightlyGrowth
+  sessionHistory: localEncrypted

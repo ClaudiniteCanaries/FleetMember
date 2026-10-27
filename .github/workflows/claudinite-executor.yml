@@ -31,6 +31,9 @@ jobs:
       || github.event.label.name == 'task:urgent'
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    environment:
+      name: claudinite
+      deployment: false
     permissions:
       actions: write
       contents: write
@@ -61,6 +64,8 @@ jobs:
           CLAUDINITE_VARS: ${{ toJSON(vars) }}
           CCR_ROUTINE_TOKEN: ${{ secrets.CCR_ROUTINE_TOKEN }}
           # claudinite:secrets
+          SESSION_HISTORY_KEY: ${{ secrets.SESSION_HISTORY_KEY }}
+          SESSION_HISTORY_KEY_PREVIOUS: ${{ secrets.SESSION_HISTORY_KEY_PREVIOUS }}
           CLAUDINITE_MANAGER_TOKEN: ${{ secrets.CLAUDINITE_MANAGER_TOKEN }}
         run: .claudinite/bin/cn execute loop
       # The usage fold leaves its record here; a run that folded nothing
