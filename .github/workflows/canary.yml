@@ -459,14 +459,26 @@ jobs:
             echo "$text"
             exit 1
           }
-          found=
-          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/claudinite-executor.yml/runs?created=%3E%3D$started&per_page=20" --jq '.workflow_runs[].id'); do
-            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --jq '.artifacts[].name' | grep -qx "claudinite-growth-bundle-$number"; then
-              found=$run
-            fi
-          done
-          [ -n "$found" ] || { echo "::error::no executor run uploaded claudinite-growth-bundle-$number"; exit 1; }
-          echo "run $found uploaded claudinite-growth-bundle-$number; #$number: $labels"
+          # An engine at or past ClaudiniteEngine#577 keeps the bundle on a parentless
+          # branch of its own holding only the bundle; an older one uploaded an artifact.
+          branch=$(git ls-remote --heads origin "refs/heads/claudinite/growth-bundle/$number/*" | awk '{print $2}' | sed 's#^refs/heads/##' | sort | tail -n 1)
+          if [ -n "$branch" ]; then
+            git fetch --quiet origin "refs/heads/$branch"
+            parents=$(git rev-list --parents -n 1 FETCH_HEAD | wc -w)
+            files=$(git ls-tree --name-only FETCH_HEAD)
+            [ "$parents" = 1 ] || { echo "::error::$branch has a parent"; exit 1; }
+            [ "$files" = bundle.json.gz.age ] || { echo "::error::$branch holds more than its bundle: $files"; exit 1; }
+            echo "$branch holds the bundle; #$number: $labels"
+          else
+            found=
+            for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/claudinite-executor.yml/runs?created=%3E%3D$started&per_page=20" --jq '.workflow_runs[].id'); do
+              if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --jq '.artifacts[].name' | grep -qx "claudinite-growth-bundle-$number"; then
+                found=$run
+              fi
+            done
+            [ -n "$found" ] || { echo "::error::#$number has neither a claudinite/growth-bundle/$number/<stamp> branch nor an executor run that uploaded claudinite-growth-bundle-$number"; exit 1; }
+            echo "run $found uploaded claudinite-growth-bundle-$number; #$number: $labels"
+          fi
           grep -q 'Could not start an agent session' <<<"$text" || grep -q 'running-agent' <<<"$labels" || {
             echo "::error::#$number neither started an agent session nor said why it could not"
             exit 1
