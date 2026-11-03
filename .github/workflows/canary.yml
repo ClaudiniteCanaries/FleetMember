@@ -337,8 +337,8 @@ jobs:
           echo "seeded conversation-logs: $(git rev-list --count HEAD) commits, $(ls | wc -l) captures at the tip"
 
   # S-09 and S-12. The fleet manager's canary (S-08) gives this repo its key
-  # secrets and commits the public half to main; the job after this one waits
-  # for that file. A growth-extract item that reaches the hand-off, a session
+  # secrets and commits the public half to main; this job waits for that file
+  # and the growth job after it needs it. A growth-extract item that reaches the hand-off, a session
   # started or one that could not start, is the proof the code-work got there
   # with a bundle.
   await-key:
