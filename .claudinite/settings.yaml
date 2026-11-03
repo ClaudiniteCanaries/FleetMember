@@ -12,6 +12,9 @@ packs:
   manager:
     repo: "ClaudiniteCanaries/FleetManager"
 tasks:
+  routines:
+    default:
+      url: "https://api.anthropic.com/v1/claude_code/routines/trig_01NihaGEmDDy7rzGEBh8zJL8"
   frequency:
     "engine/update": "daily"
   merge:
